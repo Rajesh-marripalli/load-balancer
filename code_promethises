@@ -1,0 +1,79 @@
+<Proxy "balancer://app-cluster">
+    BalancerMember http://localhost:8080 route=server1 retry=10 timeout=5
+    BalancerMember http://localhost:8081 route=server2 retry=10 timeout=5
+
+    ProxySet stickysession=JSESSIONID
+    ProxySet lbmethod=byrequests
+</Proxy>
+
+ProxyPass /app balancer://app-cluster/app stickysession=JSESSIONID
+ProxyPassReverse /app balancer://app-cluster/app
+..................................................................
+<Engine name="Catalina" defaultHost="localhost" jvmRoute="server1">
+
+  <Cluster className="org.apache.catalina.ha.tcp.SimpleTcpCluster">
+    <Manager className="org.apache.catalina.ha.session.DeltaManager"
+             expireSessionsOnShutdown="false"
+             notifyListenersOnReplication="true"/>
+    <Channel className="org.apache.catalina.tribes.group.GroupChannel">
+      <Membership className="org.apache.catalina.tribes.membership.McastService"
+                  address="228.0.0.4"
+                  port="45564"
+                  frequency="500"
+                  dropTime="3000"/>
+    </Channel>
+    <Valve className="org.apache.catalina.ha.tcp.ReplicationValve" />
+    <ClusterListener className="org.apache.catalina.ha.session.JvmRouteSessionIDBinderListener"/>
+    <ClusterListener className="org.apache.catalina.ha.session.ClusterSessionListener"/>
+  </Cluster>
+
+</Engine>
+.........................................................................................
+<Engine name="Catalina" defaultHost="localhost" jvmRoute="server2">
+ Important: jvmRoute must match the Apache route.
+<web-app ...>
+    <distributable/>
+</web-app>
+......................................................................................
+sudo systemctl start apache2
+sudo systemctl stop apache2
+sudo systemctl restart apache2
+sudo systemctl status apache2
+sudo apachectl -t
+sudo ss -tulpn | grep apache2
+....................................................
+
+wget https://github.com/Lusitaniae/apache_exporter/releases/download/v0.13.3/apache_exporter-0.13.3.linux-amd64.tar.gz
+tar xvf apache_exporter-*.tar.gz
+mv apache_exporter-0.13.3.linux-amd64 ~/apache_exporter
+.........................................................
+~/apache_exporter/apache_exporter \
+  --telemetry.address=:9117 \
+  --scrape_uri="http://localhost:8080/server-status?auto"
+...................................................
+wget https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/0.20.0/jmx_prometheus_javaagent-0.20.0.jar -P ~/
+
+CATALINA_OPTS="$CATALINA_OPTS -javaagent:$HOME/jmx_prometheus_javaagent-0.20.0.jar=9404:$HOME/tomcat_jmx.yml"
+..................................
+
+
+wget https://github.com/prometheus/prometheus/releases/download/v2.54.1/prometheus-2.54.1.linux-amd64.tar.gz
+tar xvf prometheus-*.tar.gz
+mv prometheus-2.54.1.linux-amd64 ~/prometheus
+................
+~/prometheus/prometheus --config.file=~/prometheus/prometheus.yml
+.............................
+scrape_configs:
+  - job_name: 'apache'
+    static_configs:
+      - targets: ['localhost:9117']
+
+  - job_name: 'tomcat1'
+    static_configs:
+      - targets: ['localhost:9404']
+
+  - job_name: 'tomcat2'
+    static_configs:
+      - targets: ['localhost:9405']
+
+
