@@ -1,0 +1,192 @@
+# ==================================================================
+# STICKY SESSION CONFIGURATION FOR APACHE LOAD BALANCER
+# ==================================================================
+
+# Required Modules for Sticky Sessions
+LoadModule proxy_module modules/mod_proxy.so
+LoadModule proxy_http_module modules/mod_proxy_http.so
+LoadModule proxy_balancer_module modules/mod_proxy_balancer.so
+LoadModule lbmethod_byrequests_module modules/mod_lbmethod_byrequests.so
+LoadModule headers_module modules/mod_headers.so
+
+# ==================================================================
+# METHOD 1: COOKIE-BASED STICKY SESSIONS (Most Common)
+# ==================================================================
+
+<Proxy "balancer://app-cluster">
+    # Each server gets a unique route identifier
+    BalancerMember http://localhost:8080 route=server1 retry=10 timeout=5
+    BalancerMember http://localhost:8081 route=server2 retry=10 timeout=5  
+    BalancerMember http://localhost:8082 route=server3 retry=10 timeout=5
+    
+    # Enable sticky sessions using JSESSIONID cookie
+    ProxySet stickysession=JSESSIONID
+    ProxySet lbmethod=byrequests
+</Proxy>
+
+# Proxy configuration with sticky session support
+ProxyPass /load balancer://app-cluster/load/load stickysession=JSESSIONID
+ProxyPassReverse /load balancer://app-cluster/load/load
+
+# ==================================================================
+# METHOD 2: CUSTOM COOKIE-BASED STICKY SESSIONS
+# ==================================================================
+
+<Proxy "balancer://app-cluster-custom">
+    BalancerMember http://localhost:8080 route=server1
+    BalancerMember http://localhost:8081 route=server2
+    BalancerMember http://localhost:8082 route=server3
+    
+    # Use custom cookie name for sticky sessions
+    ProxySet stickysession=ROUTEID
+    ProxySet lbmethod=byrequests
+</Proxy>
+
+# Custom cookie header manipulation
+Header add Set-Cookie "ROUTEID=.%{BALANCER_WORKER_ROUTE}e; Path=/; HttpOnly; Secure"
+
+# ==================================================================
+# METHOD 3: URL-BASED STICKY SESSIONS (jsessionid in URL)
+# ==================================================================
+
+<Proxy "balancer://app-cluster-url">
+    BalancerMember http://localhost:8080 route=server1
+    BalancerMember http://localhost:8081 route=server2
+    BalancerMember http://localhost:8082 route=server3
+    
+    # Support both cookie and URL-based session tracking
+    ProxySet stickysession=JSESSIONID
+    ProxySet lbmethod=byrequests
+</Proxy>
+
+# This handles URLs like: /load/view;jsessionid=ABC123.server1
+ProxyPass /load balancer://app-cluster-url/load/load stickysession=JSESSIONID
+
+# ==================================================================
+# METHOD 4: IP-BASED STICKY SESSIONS (Simple but limited)
+# ==================================================================
+
+<Proxy "balancer://app-cluster-ip">
+    BalancerMember http://localhost:8080 route=server1
+    BalancerMember http://localhost:8081 route=server2
+    BalancerMember http://localhost:8082 route=server3
+    
+    # Use IP-based routing (not recommended for production)
+    ProxySet lbmethod=byrequests
+</Proxy>
+
+# Custom module or rewrite rules needed for IP-based affinity
+# RewriteEngine On
+# RewriteMap servers "rnd:/path/to/servermap.txt"
+# RewriteRule ^/load/(.*) http://${servers:%{REMOTE_ADDR}}/load/load/$1 [P,L]
+
+# ==================================================================
+# METHOD 5: ADVANCED STICKY SESSION WITH FAILOVER
+# ==================================================================
+
+<Proxy "balancer://app-cluster-advanced">
+    # Primary servers with load balancing
+    BalancerMember http://localhost:8080 route=server1 retry=30 timeout=5
+    BalancerMember http://localhost:8081 route=server2 retry=30 timeout=5
+    BalancerMember http://localhost:8082 route=server3 retry=30 timeout=5
+    
+    # Hot standby server (only used if primary servers fail)
+    BalancerMember http://localhost:8083 route=standby status=+H retry=60
+    
+    # Sticky session configuration with failover
+    ProxySet stickysession=JSESSIONID
+    ProxySet lbmethod=byrequests
+    
+    # Allow failover to other servers if sticky server is down
+    # Note: This may cause session loss
+</Proxy>
+
+# ==================================================================
+# SPRING BOOT SPECIFIC CONFIGURATION
+# ==================================================================
+
+# For your Spring Boot application with Tomcat
+<Proxy "balancer://spring-cluster">
+    # Spring Boot with embedded Tomcat servers
+    BalancerMember http://localhost:8080 route=boot1 retry=10 timeout=5
+    BalancerMember http://localhost:8081 route=boot2 retry=10 timeout=5
+    BalancerMember http://localhost:8082 route=boot3 retry=10 timeout=5
+    
+    # Spring Boot typically uses JSESSIONID
+    ProxySet stickysession=JSESSIONID
+    ProxySet lbmethod=byrequests
+</Proxy>
+
+ProxyPass /load balancer://spring-cluster/load/load stickysession=JSESSIONID
+ProxyPassReverse /load balancer://spring-cluster/load/load
+
+# ==================================================================
+# SESSION DEBUGGING AND MONITORING
+# ==================================================================
+
+# Custom log format to track sticky sessions
+LogFormat "%h %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\" \"%{JSESSIONID}C\" \"%{BALANCER_WORKER_ROUTE}e\"" sticky_session
+
+# Use the sticky session log format
+CustomLog logs/sticky_sessions.log sticky_session
+
+# Enable detailed proxy logging for debugging
+LogLevel proxy:debug
+
+# ==================================================================
+# HTTPS VIRTUAL HOST WITH STICKY SESSIONS
+# ==================================================================
+
+<VirtualHost *:443>
+    ServerName your-domain.com
+    
+    # SSL Configuration (same as before)
+    SSLEngine on
+    SSLCertificateFile conf/ssl/your-domain.com.crt
+    SSLCertificateKeyFile conf/ssl/your-domain.com.key
+    
+    # Sticky session proxy configuration
+    <Proxy "balancer://ssl-app-cluster">
+        BalancerMember https://backend1:8443 route=ssl-server1 retry=10
+        BalancerMember https://backend2:8443 route=ssl-server2 retry=10
+        BalancerMember https://backend3:8443 route=ssl-server3 retry=10
+        
+        ProxySet stickysession=JSESSIONID
+        ProxySet lbmethod=byrequests
+    </Proxy>
+    
+    # SSL backend with sticky sessions
+    ProxyPass /load balancer://ssl-app-cluster/load/load stickysession=JSESSIONID
+    ProxyPassReverse /load balancer://ssl-app-cluster/load/load
+    
+    # Ensure cookies are secure over HTTPS
+    Header edit Set-Cookie ^(.*)$ "$1; Secure"
+</VirtualHost>
+
+# ==================================================================
+# BALANCER MANAGER WITH STICKY SESSION INFO
+# ==================================================================
+
+<Location "/balancer-manager">
+    SetHandler balancer-manager
+    
+    # Show sticky session information in balancer manager
+    ProxyPass !
+    
+    # Restrict access
+    Require ip 127.0.0.1
+    Require ip 192.168.0.0/16
+</Location>
+
+# ==================================================================
+# HEALTH CHECK WITH SESSION AWARENESS
+# ==================================================================
+
+# Health check that doesn't interfere with sticky sessions
+<Location "/health-check">
+    ProxyPass balancer://app-cluster/health
+    ProxyPassReverse balancer://app-cluster/health
+    
+    # Don't create sticky sessions for health checks
+    ProxyPassMatch /health-check !stickysession
+</Location>
